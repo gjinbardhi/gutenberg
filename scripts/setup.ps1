@@ -1,59 +1,135 @@
-$ErrorActionPreference = "Stop"
+#requires -Version 5.1
+<#
+.SYNOPSIS
+  Project setup script: creates a .env file (if missing) and loads it into env vars.
+  Optional: install deps (npm/composer).
 
-function Run-WP([string]$args) {
-  docker compose run -T --rm --user 33:33 wpcli $args
+.PARAMETER Force
+  Overwrite an existing .env with default values.
+
+.PARAMETER Persist
+  Also write variables to the current user's persistent environment.
+
+.EXAMPLES
+  .\scripts\setup.ps1
+  .\scripts\setup.ps1 -Force
+  .\scripts\setup.ps1 -Persist
+  .\scripts\setup.ps1 -Force -Persist
+#>
+
+[CmdletBinding()]
+param(
+  [switch]$Force,
+  [switch]$Persist
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+# Move to repo root (folder containing this script's parent)
+$scriptPath = $MyInvocation.MyCommand.Path
+$repoRoot   = Split-Path -Parent $scriptPath | Split-Path -Parent
+Set-Location $repoRoot
+
+$envFile = Join-Path $repoRoot '.env'
+
+# Default .env content — edit to your needs
+$defaultEnv = @"
+# auto-created by setup.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+# Lines beginning with # are ignored.
+
+APP_ENV=development
+
+# WordPress / App (adjust as needed)
+WP_URL=http://localhost:8888
+WP_HOME=http://localhost:8888
+
+# Database (adjust as needed)
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=wordpress
+DB_USER=wp
+DB_PASSWORD=wp
+
+# Build
+NODE_ENV=development
+"@
+
+function New-Or-Overwrite-DotEnv {
+  param([string]$Path, [string]$Content, [switch]$Overwrite)
+
+  if ((Test-Path $Path) -and -not $Overwrite) {
+    Write-Host ".env already exists at $Path (use -Force to overwrite)."
+    return
+  }
+
+  $Content | Set-Content -Path $Path -Encoding UTF8
+  Write-Host "Created .env with dev defaults at $Path"
 }
 
-Write-Host "Waiting for DB to be ready..."
-for ($i=0; $i -lt 30; $i++) {
-  docker compose exec -T db mysqladmin ping -h localhost -p$env:DB_PASSWORD --silent 2>$null
-  if ($LASTEXITCODE -eq 0) { break }
-  Start-Sleep -Seconds 2
+function Load-DotEnv {
+  [OutputType([hashtable])]
+  param([string]$Path)
+
+  if (-not (Test-Path $Path)) {
+    throw ".env not found at $Path"
+  }
+
+  $pairs = @{}
+  foreach ($line in [System.IO.File]::ReadLines($Path)) {
+    # Skip comments/blank lines
+    if ($line -match '^\s*#' -or $line.Trim() -eq '') { continue }
+
+    # KEY=VALUE (VALUE may contain spaces). Keep simple/robust.
+    $m = [regex]::Match($line, '^\s*([^=\s#][^=]*)\s*=\s*(.*)\s*$')
+    if (-not $m.Success) { continue }
+
+    $key = $m.Groups[1].Value.Trim()
+    $val = $m.Groups[2].Value.Trim()
+
+    # Strip surrounding quotes if present
+    if (($val.StartsWith('"') -and $val.EndsWith('"')) -or
+        ($val.StartsWith("'") -and $val.EndsWith("'"))) {
+      $val = $val.Substring(1, $val.Length - 2)
+    }
+
+    # Set for current session
+    Set-Item -Path ("Env:{0}" -f $key) -Value $val
+    $pairs[$key] = $val
+
+    # Optionally persist for future sessions
+    if ($Persist) {
+      [Environment]::SetEnvironmentVariable($key, $val, 'User')
+    }
+  }
+
+  return $pairs
 }
 
-# 1) wp-config.php
-try {
-  Run-WP "config path" | Out-Null
-  Write-Host "wp-config.php already exists."
-} catch {
-  Write-Host "Generating wp-config.php..."
-  Run-WP "config create --dbname=$env:DB_NAME --dbuser=$env:DB_USER --dbpass=$env:DB_PASSWORD --dbhost=$env:DB_HOST --skip-check --force"
+# 1) Create/overwrite .env if needed
+New-Or-Overwrite-DotEnv -Path $envFile -Content $defaultEnv -Overwrite:$Force
+
+# 2) Load .env into environment
+$loaded = Load-DotEnv -Path $envFile
+Write-Host ("Loaded {0} variable(s) into current session." -f $loaded.Keys.Count)
+
+# 3) Optional: install dependencies if manifests are present
+if (Test-Path (Join-Path $repoRoot 'package.json')) {
+  Write-Host "Detected package.json — installing Node dependencies..."
+  if (Test-Path (Join-Path $repoRoot 'package-lock.json')) {
+    npm ci
+  } else {
+    npm install
+  }
 }
 
-# 2) Core install
-$siteUrl = $env:WP_SITE_URL
-try {
-  Run-WP "core is-installed" | Out-Null
-  Write-Host "WordPress already installed."
-} catch {
-  Write-Host "Installing WordPress..."
-  Run-WP "core install --url='$siteUrl' --title='WP Dev' --admin_user='$env:ADMIN_USER' --admin_password='$env:ADMIN_PASS' --admin_email='$env:ADMIN_EMAIL'"
+if (Test-Path (Join-Path $repoRoot 'composer.json')) {
+  if (Get-Command composer -ErrorAction SilentlyContinue) {
+    Write-Host "Detected composer.json — installing PHP dependencies..."
+    composer install
+  } else {
+    Write-Warning "Composer not found on PATH — skipping PHP deps."
+  }
 }
 
-# 3) Permalinks
-Run-WP "rewrite structure '/%postname%/'"
-Run-WP "rewrite flush --hard"
-
-# 4) Ensure WPGraphQL + our block plugin are active
-Run-WP "plugin install wp-graphql --activate"
-Run-WP "plugin activate latest-posts-grid" | Out-Null
-
-# 5) Create 'Home' page with our block (idempotent)
-$block = '<!-- wp:lpg/latest-posts-grid {"postsToShow":6,"columns":3,"showExcerpt":true,"showDate":true} /-->'
-$homeId = (Run-WP "post list --post_type=page --name='home' --field=ID").Trim()
-if (-not $homeId) {
-  $homeId = (Run-WP "post create --post_type=page --post_status=publish --post_title='Home' --porcelain --post_content='$block'").Trim()
-} else {
-  Run-WP "post update $homeId --post_content='$block'" | Out-Null
-}
-
-# 6) Set as static front page
-Run-WP "option update show_on_front page" | Out-Null
-Run-WP "option update page_on_front $homeId" | Out-Null
-Run-WP "rewrite flush" | Out-Null
-
-Write-Host ""
 Write-Host "Setup complete."
-Write-Host "Site:  $siteUrl"
-Write-Host "Admin: $siteUrl/wp-admin  ($($env:ADMIN_USER) / $($env:ADMIN_PASS))"
-Write-Host "GraphQL endpoint: POST $siteUrl/graphql"

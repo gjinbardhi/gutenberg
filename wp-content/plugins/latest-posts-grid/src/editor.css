@@ -1,0 +1,11 @@
+/* Make it look tidy inside the editor canvas */
+.editor-styles-wrapper .wp-block-lpg-latest-posts-grid .lpg-grid {
+  gap: 1rem;
+}
+.editor-styles-wrapper .wp-block-lpg-latest-posts-grid .lpg-card {
+  box-shadow: 0 1px 3px rgba(0,0,0,.05);
+  transform: none;
+}
+.editor-styles-wrapper .wp-block-lpg-latest-posts-grid .lpg-card:hover {
+  transform: none;
+}

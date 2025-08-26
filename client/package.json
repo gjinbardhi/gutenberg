@@ -1,0 +1,6 @@
+{
+  "name": "wp-graphql-client",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node index.mjs" }
+}

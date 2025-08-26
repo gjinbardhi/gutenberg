@@ -1,0 +1,55 @@
+/* Make the block wider on the page */
+.wp-block-lpg-latest-posts-grid{
+  margin-inline: auto !important;
+  max-width: min(1200px, 94vw) !important;
+}
+
+/* GRID: wide, landscape cards with breathing room */
+.wp-block-lpg-latest-posts-grid .lpg-grid{
+  display: grid !important;
+  /* auto-fit packs as many as will fit, each at least 320px wide */
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)) !important;
+  gap: 28px !important;
+}
+
+/* CARD */
+.wp-block-lpg-latest-posts-grid .lpg-card{
+  background: #fff !important;
+  border-radius: 12px !important;
+  box-shadow: 0 6px 18px rgba(0,0,0,.06) !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* IMAGE: force a landscape rectangle (16:9) */
+.wp-block-lpg-latest-posts-grid .lpg-img{
+  width: 100% !important;
+  /* modern browsers */
+  aspect-ratio: 16 / 9 !important;
+  /* fallback height if aspect-ratio is not supported */
+  height: 180px !important;
+  position: relative !important;
+}
+
+.wp-block-lpg-latest-posts-grid .lpg-img img{
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+}
+
+/* META */
+.wp-block-lpg-latest-posts-grid .lpg-meta{
+  padding: 12px 14px 16px !important;
+}
+
+.wp-block-lpg-latest-posts-grid .lpg-title{
+  margin: 0 0 6px !important;
+  font-weight: 600 !important;
+}
+
+.wp-block-lpg-latest-posts-grid .lpg-date{
+  color: #6b7280 !important;
+  font-size: .9rem !important;
+}

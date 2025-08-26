@@ -1,0 +1,22 @@
+# Env
+.env
+.env.*.local
+
+# Node
+node_modules/
+**/node_modules/
+
+# WP runtime stuff
+wp-content/uploads/
+wp-content/cache/
+
+# Editor/OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Keep the built plugin assets (needed at runtime!)
+!wp-content/plugins/latest-posts-grid/build/

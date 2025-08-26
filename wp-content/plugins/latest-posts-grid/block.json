@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schemas.wp.org/trunk/block.json",
+  "apiVersion": 3,
+  "name": "lpg/latest-posts-grid",
+  "title": "Latest Posts Grid",
+  "category": "widgets",
+  "icon": "grid-view",
+  "description": "Fetch and display latest posts via WPGraphQL in a responsive grid.",
+  "keywords": ["posts", "grid", "graphql", "latest"],
+  "supports": {
+    "html": false,
+    "align": ["wide", "full"]
+  },
+  "attributes": {
+    "postsToShow": { "type": "number", "default": 4 },
+    "columns":     { "type": "number", "default": 3 },
+    "showExcerpt": { "type": "boolean", "default": true },
+    "showDate":    { "type": "boolean", "default": true }
+  },
+  "editorScript": "file:./build/index.js",
+  "viewScript":   "file:./build/view.js",
+  "style":        "file:./build/style-index.css",
+  "editorStyle":  "file:./build/index.css",
+  "textdomain":   "latest-posts-grid"
+}
+

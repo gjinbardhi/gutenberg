@@ -1,135 +1,114 @@
-#requires -Version 5.1
-<#
-.SYNOPSIS
-  Project setup script: creates a .env file (if missing) and loads it into env vars.
-  Optional: install deps (npm/composer).
-
-.PARAMETER Force
-  Overwrite an existing .env with default values.
-
-.PARAMETER Persist
-  Also write variables to the current user's persistent environment.
-
-.EXAMPLES
-  .\scripts\setup.ps1
-  .\scripts\setup.ps1 -Force
-  .\scripts\setup.ps1 -Persist
-  .\scripts\setup.ps1 -Force -Persist
-#>
+# scripts/setup.ps1  (v2 - robust quoting for Windows/PowerShell)
+# Usage:
+#   docker compose up -d --build
+#   .\scripts\setup.ps1
+# Then open: http://localhost:8080
 
 [CmdletBinding()]
 param(
-  [switch]$Force,
-  [switch]$Persist
+  [string]$SiteUrl    = "http://localhost:8080",
+  [string]$AdminUser  = "admin",
+  [string]$AdminPass  = "admin",
+  [string]$AdminEmail = "admin@example.com"
 )
 
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
-
-# Move to repo root (folder containing this script's parent)
-$scriptPath = $MyInvocation.MyCommand.Path
-$repoRoot   = Split-Path -Parent $scriptPath | Split-Path -Parent
-Set-Location $repoRoot
-
-$envFile = Join-Path $repoRoot '.env'
-
-# Default .env content — edit to your needs
-$defaultEnv = @"
-# auto-created by setup.ps1 on $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-# Lines beginning with # are ignored.
-
-APP_ENV=development
-
-# WordPress / App (adjust as needed)
-WP_URL=http://localhost:8888
-WP_HOME=http://localhost:8888
-
-# Database (adjust as needed)
-DB_HOST=localhost
-DB_PORT=3306
-DB_NAME=wordpress
-DB_USER=wp
-DB_PASSWORD=wp
-
-# Build
-NODE_ENV=development
-"@
-
-function New-Or-Overwrite-DotEnv {
-  param([string]$Path, [string]$Content, [switch]$Overwrite)
-
-  if ((Test-Path $Path) -and -not $Overwrite) {
-    Write-Host ".env already exists at $Path (use -Force to overwrite)."
-    return
-  }
-
-  $Content | Set-Content -Path $Path -Encoding UTF8
-  Write-Host "Created .env with dev defaults at $Path"
+function Ensure-Ok($ExitCode, $Msg) {
+  if ($ExitCode -ne 0) { throw $Msg }
 }
 
-function Load-DotEnv {
-  [OutputType([hashtable])]
-  param([string]$Path)
+Write-Host "→ Checking Docker CLI..." -ForegroundColor Cyan
+docker version     | Out-Null; Ensure-Ok $LASTEXITCODE "Docker is not available."
+docker compose version | Out-Null; Ensure-Ok $LASTEXITCODE "Docker Compose is not available."
 
-  if (-not (Test-Path $Path)) {
-    throw ".env not found at $Path"
-  }
-
-  $pairs = @{}
-  foreach ($line in [System.IO.File]::ReadLines($Path)) {
-    # Skip comments/blank lines
-    if ($line -match '^\s*#' -or $line.Trim() -eq '') { continue }
-
-    # KEY=VALUE (VALUE may contain spaces). Keep simple/robust.
-    $m = [regex]::Match($line, '^\s*([^=\s#][^=]*)\s*=\s*(.*)\s*$')
-    if (-not $m.Success) { continue }
-
-    $key = $m.Groups[1].Value.Trim()
-    $val = $m.Groups[2].Value.Trim()
-
-    # Strip surrounding quotes if present
-    if (($val.StartsWith('"') -and $val.EndsWith('"')) -or
-        ($val.StartsWith("'") -and $val.EndsWith("'"))) {
-      $val = $val.Substring(1, $val.Length - 2)
-    }
-
-    # Set for current session
-    Set-Item -Path ("Env:{0}" -f $key) -Value $val
-    $pairs[$key] = $val
-
-    # Optionally persist for future sessions
-    if ($Persist) {
-      [Environment]::SetEnvironmentVariable($key, $val, 'User')
-    }
-  }
-
-  return $pairs
+Write-Host "Waiting for database (mysql) to be healthy..."
+$attempts = 0
+while ($true) {
+  $json = docker compose ps --format json
+  Ensure-Ok $LASTEXITCODE "docker compose ps failed"
+  $list = $json | ConvertFrom-Json
+  $db = $list | Where-Object { $_.Service -eq 'db' }
+  $state = $db.Health
+  if ($null -ne $state -and $state -eq 'healthy') { break }
+  Start-Sleep -Seconds 2
+  $attempts++
+  if ($attempts -gt 180) { throw 'DB did not become healthy in time.' }
 }
 
-# 1) Create/overwrite .env if needed
-New-Or-Overwrite-DotEnv -Path $envFile -Content $defaultEnv -Overwrite:$Force
+# -------- Bash script we will run inside the wpcli container --------
+$BashScript = @'
+set -euo pipefail
 
-# 2) Load .env into environment
-$loaded = Load-DotEnv -Path $envFile
-Write-Host ("Loaded {0} variable(s) into current session." -f $loaded.Keys.Count)
+WP="wp --allow-root --path=/var/www/html"
 
-# 3) Optional: install dependencies if manifests are present
-if (Test-Path (Join-Path $repoRoot 'package.json')) {
-  Write-Host "Detected package.json — installing Node dependencies..."
-  if (Test-Path (Join-Path $repoRoot 'package-lock.json')) {
-    npm ci
-  } else {
-    npm install
-  }
-}
+echo "Checking if WordPress is installed…"
+if ! $WP core is-installed >/dev/null 2>&1; then
+  echo "Installing WordPress core…"
+  $WP core install \
+    --url="__SITE_URL__" \
+    --title="Gutenberg GraphQL Demo" \
+    --admin_user="__ADMIN_USER__" \
+    --admin_password="__ADMIN_PASS__" \
+    --admin_email="__ADMIN_EMAIL__"
+else
+  echo "WordPress already installed."
+fi
 
-if (Test-Path (Join-Path $repoRoot 'composer.json')) {
-  if (Get-Command composer -ErrorAction SilentlyContinue) {
-    Write-Host "Detected composer.json — installing PHP dependencies..."
-    composer install
-  } else {
-    Write-Warning "Composer not found on PATH — skipping PHP deps."
-  }
-}
+# Ensure site/home URL are correct (important when switching ports)
+$WP option update siteurl "__SITE_URL__"
+$WP option update home "__SITE_URL__"
 
-Write-Host "Setup complete."
+# Pretty permalinks
+$WP rewrite structure "/%postname%/" --hard
+$WP rewrite flush --hard
+
+# Activate WPGraphQL (install if missing)
+if ! $WP plugin is-installed wp-graphql >/dev/null 2>&1; then
+  echo "Installing WPGraphQL…"
+  $WP plugin install wp-graphql --activate
+else
+  $WP plugin activate wp-graphql
+fi
+
+# Activate our custom block plugin (will fail silently if not present)
+$WP plugin activate latest-posts-grid || true
+
+# Create a few demo posts if there are none
+if [ "$($WP post list --post_type=post --field=ID | wc -l | tr -d ' ')" -eq "0" ]; then
+  echo "Generating demo posts…"
+  $WP post generate --count=6 --post_type=post >/dev/null
+fi
+
+# Create (or find) a Home page
+home_id="$($WP post list --post_type=page --pagename=home --field=ID)"
+if [ -z "$home_id" ]; then
+  home_id="$($WP post create --post_type=page --post_status=publish --post_title='Home' --porcelain)"
+fi
+
+# Put the block on the Home page (uses /scripts/set-home.php)
+php /scripts/set-home.php "$home_id" || true
+
+# Set Home as the front page
+$WP option update show_on_front 'page'
+$WP option update page_on_front "$home_id"
+
+echo "Done."
+'@
+
+# Inject params and normalize line endings
+$BashScript = $BashScript.
+  Replace("__SITE_URL__",   $SiteUrl).
+  Replace("__ADMIN_USER__", $AdminUser).
+  Replace("__ADMIN_PASS__", $AdminPass).
+  Replace("__ADMIN_EMAIL__", $AdminEmail) -replace "`r`n","`n"
+
+# Base64-encode to avoid PowerShell escaping issues
+$bytes  = [System.Text.Encoding]::UTF8.GetBytes($BashScript)
+$base64 = [Convert]::ToBase64String($bytes)
+
+Write-Host "Running WordPress setup inside wpcli…" -ForegroundColor Cyan
+# Decode inside container and run
+docker compose run -T --rm wpcli bash -lc "set -e; echo $base64 | base64 -d > /tmp/run.sh && chmod +x /tmp/run.sh && bash /tmp/run.sh"
+Ensure-Ok $LASTEXITCODE "wpcli script failed"
+
+Write-Host ""
+Write-Host "✅ Setup complete. Open: $SiteUrl" -ForegroundColor Green
